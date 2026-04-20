@@ -147,6 +147,14 @@ func (ua *UserAgent) SendRegister(profile *account.Profile, recipient sip.SipUri
 }
 
 func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri, expires uint32, body interface{}, contentType sip.ContentType) error {
+	return ua.sendMessage(profile, target, recipient, expires, body, contentType, false)
+}
+
+func (ua *UserAgent) SendMessageSync(profile *account.Profile, target sip.Uri, recipient sip.SipUri, expires uint32, body interface{}, contentType sip.ContentType) error {
+	return ua.sendMessage(profile, target, recipient, expires, body, contentType, true)
+}
+
+func (ua *UserAgent) sendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri, expires uint32, body interface{}, contentType sip.ContentType, waitForResult bool) error {
 	from := &sip.Address{
 		DisplayName: sip.String{Str: profile.DisplayName},
 		Uri:         profile.URI,
@@ -159,7 +167,7 @@ func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recip
 
 	request, err := ua.buildRequest(sip.MESSAGE, from, to, nil, recipient, profile.Routes, nil)
 	if err != nil {
-		ua.Log().Errorf("INVITE: err = %v", err)
+		ua.Log().Errorf("MESSAGE: err = %v", err)
 		return err
 	}
 
@@ -179,16 +187,18 @@ func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recip
 		authorizer = auth.NewClientAuthorizer(profile.AuthInfo.AuthUser, profile.AuthInfo.Password)
 	}
 
-	resp, err := ua.RequestWithContext(context.TODO(), *request, authorizer, false, 1)
+	resp, err := ua.RequestWithContext(context.TODO(), *request, authorizer, waitForResult, 1)
 	if err != nil {
-		ua.Log().Errorf("INVITE: Request [INVITE] failed, err => %v", err)
+		ua.Log().Errorf("MESSAGE: Request [MESSAGE] failed, err => %v", err)
 		return err
 	}
 
 	if resp != nil {
 		stateCode := resp.StatusCode()
-		ua.Log().Debugf("INVITE: resp %d => %s", stateCode, resp.String())
-		return fmt.Errorf("Invite session is unsuccessful, code: %d, reason: %s", stateCode, resp.String())
+		ua.Log().Debugf("MESSAGE: resp %d => %s", stateCode, resp.String())
+		if stateCode >= 300 {
+			return fmt.Errorf("Message is unsuccessful, code: %d, reason: %s", stateCode, resp.String())
+		}
 	}
 
 	return nil
