@@ -81,7 +81,9 @@ func (ua *UserAgent) Log() log.Logger {
 	return ua.log
 }
 
-func (ua *UserAgent) handleInviteState(is *session.Session, request *sip.Request, response *sip.Response, state session.Status, tx *sip.Transaction) {
+func (ua *UserAgent) handleInviteState(is *session.Session, request *sip.Request,
+	response *sip.Response, state session.Status, tx *sip.Transaction,
+) {
 	if request != nil && *request != nil {
 		is.StoreRequest(*request)
 	}
@@ -108,8 +110,8 @@ func (ua *UserAgent) buildRequest(
 	contact *sip.Address,
 	recipient sip.SipUri,
 	routes []sip.Uri,
-	callID *sip.CallID) (*sip.Request, error) {
-
+	callID *sip.CallID,
+) (*sip.Request, error) {
 	builder := sip.NewRequestBuilder()
 
 	builder.SetMethod(method)
@@ -132,7 +134,7 @@ func (ua *UserAgent) buildRequest(
 		return nil, err
 	}
 
-	//ua.Log().Infof("buildRequest %s => \n%v", method, req)
+	// ua.Log().Infof("buildRequest %s => \n%v", method, req)
 	return &req, nil
 }
 
@@ -146,15 +148,21 @@ func (ua *UserAgent) SendRegister(profile *account.Profile, recipient sip.SipUri
 	return register, nil
 }
 
-func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri, expires uint32, body interface{}, contentType sip.ContentType) error {
-	return ua.sendMessage(profile, target, recipient, expires, body, contentType, false)
+func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
+	expires uint32, body interface{}, contentType sip.ContentType, cseq sip.CSeq,
+) error {
+	return ua.sendMessage(profile, target, recipient, expires, body, contentType, false, cseq)
 }
 
-func (ua *UserAgent) SendMessageSync(profile *account.Profile, target sip.Uri, recipient sip.SipUri, expires uint32, body interface{}, contentType sip.ContentType) error {
-	return ua.sendMessage(profile, target, recipient, expires, body, contentType, true)
+func (ua *UserAgent) SendMessageSync(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
+	expires uint32, body interface{}, contentType sip.ContentType, cseq sip.CSeq,
+) error {
+	return ua.sendMessage(profile, target, recipient, expires, body, contentType, true, cseq)
 }
 
-func (ua *UserAgent) sendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri, expires uint32, body interface{}, contentType sip.ContentType, waitForResult bool) error {
+func (ua *UserAgent) sendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
+	expires uint32, body interface{}, contentType sip.ContentType, waitForResult bool, cseq sip.CSeq,
+) error {
 	from := &sip.Address{
 		DisplayName: sip.String{Str: profile.DisplayName},
 		Uri:         profile.URI,
@@ -170,6 +178,7 @@ func (ua *UserAgent) sendMessage(profile *account.Profile, target sip.Uri, recip
 		ua.Log().Errorf("MESSAGE: err = %v", err)
 		return err
 	}
+	(*request).ReplaceHeaders(cseq.Name(), []sip.Header{&cseq})
 
 	if body != nil {
 		if contentType.Equals(sip.ContentType("application/octet-stream")) {
@@ -208,8 +217,9 @@ func (ua *UserAgent) Invite(profile *account.Profile, target sip.Uri, recipient 
 	return ua.InviteWithContext(context.TODO(), profile, target, recipient, body)
 }
 
-func (ua *UserAgent) InviteWithContext(ctx context.Context, profile *account.Profile, target sip.Uri, recipient sip.SipUri, body *string) (*session.Session, error) {
-
+func (ua *UserAgent) InviteWithContext(ctx context.Context, profile *account.Profile,
+	target sip.Uri, recipient sip.SipUri, body *string,
+) (*session.Session, error) {
 	from := &sip.Address{
 		DisplayName: sip.String{Str: profile.DisplayName},
 		Uri:         profile.URI,
@@ -285,7 +295,6 @@ func (ua *UserAgent) handleBye(request sip.Request, tx sip.ServerTransaction) {
 }
 
 func (ua *UserAgent) handleCancel(request sip.Request, tx sip.ServerTransaction) {
-
 	ua.Log().Debugf("handleCancel: Request => %s, body => %s", request.Short(), request.Body())
 	response := sip.NewResponseFromRequest(request.MessageID(), request, 200, "OK", "")
 	tx.Respond(response)
@@ -320,7 +329,6 @@ func (ua *UserAgent) handleACK(request sip.Request, tx sip.ServerTransaction) {
 }
 
 func (ua *UserAgent) handleInvite(request sip.Request, tx sip.ServerTransaction) {
-
 	ua.Log().Debugf("handleInvite => %s, body => %s", request.Short(), request.Body())
 
 	callID, ok := request.CallID()
@@ -336,20 +344,23 @@ func (ua *UserAgent) handleInvite(request sip.Request, tx sip.ServerTransaction)
 				ua.handleInviteState(is, &request, nil, session.ReInviteReceived, &transaction)
 			} else {
 				// reinvite for transaction we have no record of; reject it
-				response := sip.NewResponseFromRequest(request.MessageID(), request, sip.StatusCode(481), "Call/Transaction does not exist", "")
+				response := sip.NewResponseFromRequest(request.MessageID(), request,
+					sip.StatusCode(481), "Call/Transaction does not exist", "")
 				tx.Respond(response)
 			}
 		} else {
 			if found {
 				// retransmission; reject it
-				response := sip.NewResponseFromRequest(request.MessageID(), request, sip.StatusCode(482), "Loop Detected", "")
+				response := sip.NewResponseFromRequest(request.MessageID(), request,
+					sip.StatusCode(482), "Loop Detected", "")
 				tx.Respond(response)
 			} else {
 				contactHdr, _ := request.Contact()
 				contactAddr := ua.updateContact2UAAddr(request.Transport(), contactHdr.Address)
 				contactHdr.Address = contactAddr
 
-				is := session.NewInviteSession(ua.RequestWithContext, "UAS", contactHdr, request, *callID, transaction, session.Incoming, ua.Log())
+				is := session.NewInviteSession(ua.RequestWithContext, "UAS",
+					contactHdr, request, *callID, transaction, session.Incoming, ua.Log())
 				ua.iss.Store(NewSessionKey(*callID, fromTag), is)
 				is.SetState(session.InviteReceived)
 				ua.handleInviteState(is, &request, nil, session.InviteReceived, &transaction)
@@ -394,7 +405,9 @@ func (ua *UserAgent) handleUpdate(request sip.Request, tx sip.ServerTransaction)
 }
 
 // RequestWithContext .
-func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request, authorizer sip.Authorizer, waitForResult bool, attempt int) (sip.Response, error) {
+func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request,
+	authorizer sip.Authorizer, waitForResult bool, attempt int,
+) (sip.Response, error) {
 	s := ua.config.SipStack
 	tx, err := s.Request(request)
 	if err != nil {
@@ -412,7 +425,8 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 				contactHdr, _ := request.Contact()
 				contactAddr := ua.updateContact2UAAddr(request.Transport(), contactHdr.Address)
 				contactHdr.Address = contactAddr
-				is := session.NewInviteSession(ua.RequestWithContext, "UAC", contactHdr, request, *callID, cts, session.Outgoing, ua.Log())
+				is := session.NewInviteSession(ua.RequestWithContext, "UAC",
+					contactHdr, request, *callID, cts, session.Outgoing, ua.Log())
 				ua.iss.Store(NewSessionKey(*callID, fromTag), is)
 				is.ProvideOffer(request.Body())
 				is.SetState(session.InviteSent)
@@ -469,7 +483,7 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 					}
 				}
 
-				//errs <- err
+				// errs <- err
 				return
 			case response, ok := <-tx.Responses():
 				if !ok {
@@ -510,13 +524,15 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 				}
 
 				// unauth request
-				needAuth := (response.StatusCode() == 401 || response.StatusCode() == 407) && attempt < 2
+				needAuth := (response.StatusCode() == 401 ||
+					response.StatusCode() == 407) && attempt < 2
 				if needAuth && authorizer != nil {
 					if err := authorizer.AuthorizeRequest(request, response); err != nil {
 						errs <- err
 						return
 					}
-					if response, err := ua.RequestWithContext(ctx, request, authorizer, true, attempt+1); err == nil {
+					if response, err := ua.RequestWithContext(ctx, request,
+						authorizer, true, attempt+1); err == nil {
 						responses <- response
 					} else {
 						errs <- err
@@ -528,7 +544,8 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 				if lastResponse != nil {
 					lastResponse.SetPrevious(previousResponses)
 				}
-				errs <- sip.NewRequestError(uint(response.StatusCode()), response.Reason(), request, lastResponse)
+				errs <- sip.NewRequestError(uint(response.StatusCode()),
+					response.Reason(), request, lastResponse)
 				return
 			}
 		}
@@ -554,10 +571,10 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 					}
 				}
 			case err := <-errs:
-				//TODO: error type switch transaction.TxTimeoutError
+				// TODO: error type switch transaction.TxTimeoutError
 				switch err.(type) {
 				case *transaction.TxTimeoutError:
-					//errs <- sip.NewRequestError(408, "Request Timeout", nil, nil)
+					// errs <- sip.NewRequestError(408, "Request Timeout", nil, nil)
 					return nil, err
 				}
 				request := (err.(*sip.RequestError)).Request
