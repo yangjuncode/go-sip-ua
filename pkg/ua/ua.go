@@ -154,13 +154,13 @@ func (ua *UserAgent) SendRegister(profile *account.Profile, recipient sip.SipUri
 }
 
 func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
-	expires uint32, body interface{}, contentType sip.ContentType, cseq sip.CSeq,
+	expires uint32, body interface{}, contentType sip.ContentType,
 ) error {
 	return ua.sendMessage(profile, target, recipient, expires, body, contentType, false)
 }
 
 func (ua *UserAgent) SendMessageSync(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
-	expires uint32, body interface{}, contentType sip.ContentType, cseq sip.CSeq,
+	expires uint32, body interface{}, contentType sip.ContentType,
 ) error {
 	return ua.sendMessage(profile, target, recipient, expires, body, contentType, true)
 }
