@@ -12,10 +12,12 @@ import (
 )
 
 type RequestCallback func(ctx context.Context, request sip.Request, authorizer sip.Authorizer, waitForResult bool, attempt int) (sip.Response, error)
+type CSeqProvider func(method sip.RequestMethod) *sip.CSeq
 
 type Session struct {
 	lock           sync.Mutex
 	requestCallbck RequestCallback
+	nextRequestCSeq CSeqProvider
 	status         Status
 	callID         sip.CallID
 	offer          string
@@ -33,10 +35,11 @@ type Session struct {
 }
 
 func NewInviteSession(reqcb RequestCallback, uaType string,
-	contact *sip.ContactHeader, req sip.Request, cid sip.CallID,
+	nextRequestCSeq CSeqProvider, contact *sip.ContactHeader, req sip.Request, cid sip.CallID,
 	tx sip.Transaction, dir Direction, logger log.Logger) *Session {
 	s := &Session{
 		requestCallbck: reqcb,
+		nextRequestCSeq: nextRequestCSeq,
 		uaType:         uaType,
 		callID:         cid,
 		transaction:    tx,
@@ -418,6 +421,12 @@ func (s *Session) makeRequest(uaType string, method sip.RequestMethod, msgID sip
 	newRequest.AppendHeader(&maxForwardsHeader)
 	sip.CopyHeaders("Call-ID", inviteRequest, newRequest)
 	sip.CopyHeaders("CSeq", inviteRequest, newRequest)
+	if s.nextRequestCSeq != nil {
+		if cseq := s.nextRequestCSeq(method); cseq != nil {
+			newRequest.ReplaceHeaders(cseq.Name(), []sip.Header{cseq})
+			return newRequest
+		}
+	}
 
 	cseq, _ := newRequest.CSeq()
 	cseq.SeqNo++

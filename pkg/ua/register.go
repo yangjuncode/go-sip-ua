@@ -35,8 +35,7 @@ func NewRegister(ua *UserAgent, profile *account.Profile, recipient sip.SipUri, 
 	return r
 }
 
-func (r *Register) SendRegister(expires uint32) error {
-
+func (r *Register) prepareRequest(expires uint32) error {
 	ua := r.ua
 	profile := r.profile
 	recipient := r.recipient
@@ -52,24 +51,33 @@ func (r *Register) SendRegister(expires uint32) error {
 
 	contact := profile.Contact()
 
-	if r.request == nil || expires == 0 {
+	isNewRequest := r.request == nil || expires == 0
+	if isNewRequest {
 		request, err := ua.buildRequest(sip.REGISTER, from, to, contact, recipient, profile.Routes, nil)
 		if err != nil {
 			ua.Log().Errorf("Register: err = %v", err)
 			return err
 		}
-		expiresHeader := sip.Expires(expires)
-		(*request).AppendHeader(&expiresHeader)
 		r.request = request
-	} else {
-		cseq, _ := (*r.request).CSeq()
-		cseq.SeqNo++
-		cseq.MethodName = sip.REGISTER
+	}
 
-		(*r.request).RemoveHeader("Expires")
-		// replace Expires header.
-		expiresHeader := sip.Expires(expires)
-		(*r.request).AppendHeader(&expiresHeader)
+	if ua != nil && !isNewRequest {
+		ua.replaceRequestCSeq(*r.request)
+	}
+
+	(*r.request).RemoveHeader("Expires")
+	expiresHeader := sip.Expires(expires)
+	(*r.request).AppendHeader(&expiresHeader)
+
+	return nil
+}
+
+func (r *Register) SendRegister(expires uint32) error {
+	ua := r.ua
+	profile := r.profile
+
+	if err := r.prepareRequest(expires); err != nil {
+		return err
 	}
 
 	if profile.AuthInfo != nil && r.authorizer == nil {
