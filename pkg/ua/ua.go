@@ -53,6 +53,7 @@ type UserAgent struct {
 	RegisterStateHandler RegisterHandler
 	MessageStateHandler  MessageHandler
 	config               *UserAgentConfig
+	cseqManager          *CSeqManager
 	iss                  sync.Map /*Invite Session*/
 	log                  log.Logger
 }
@@ -61,6 +62,7 @@ type UserAgent struct {
 func NewUserAgent(config *UserAgentConfig) *UserAgent {
 	ua := &UserAgent{
 		config:               config,
+		cseqManager:          NewCSeqManager(defaultInitialCSeq),
 		iss:                  sync.Map{},
 		InviteStateHandler:   nil,
 		RegisterStateHandler: nil,
@@ -133,6 +135,9 @@ func (ua *UserAgent) buildRequest(
 		ua.Log().Errorf("err => %v", err)
 		return nil, err
 	}
+	if cseq := ua.nextRequestCSeq(method); cseq != nil {
+		req.ReplaceHeaders(cseq.Name(), []sip.Header{cseq})
+	}
 
 	// ua.Log().Infof("buildRequest %s => \n%v", method, req)
 	return &req, nil
@@ -151,17 +156,17 @@ func (ua *UserAgent) SendRegister(profile *account.Profile, recipient sip.SipUri
 func (ua *UserAgent) SendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
 	expires uint32, body interface{}, contentType sip.ContentType, cseq sip.CSeq,
 ) error {
-	return ua.sendMessage(profile, target, recipient, expires, body, contentType, false, cseq)
+	return ua.sendMessage(profile, target, recipient, expires, body, contentType, false)
 }
 
 func (ua *UserAgent) SendMessageSync(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
 	expires uint32, body interface{}, contentType sip.ContentType, cseq sip.CSeq,
 ) error {
-	return ua.sendMessage(profile, target, recipient, expires, body, contentType, true, cseq)
+	return ua.sendMessage(profile, target, recipient, expires, body, contentType, true)
 }
 
 func (ua *UserAgent) sendMessage(profile *account.Profile, target sip.Uri, recipient sip.SipUri,
-	expires uint32, body interface{}, contentType sip.ContentType, waitForResult bool, cseq sip.CSeq,
+	expires uint32, body interface{}, contentType sip.ContentType, waitForResult bool,
 ) error {
 	from := &sip.Address{
 		DisplayName: sip.String{Str: profile.DisplayName},
@@ -178,7 +183,6 @@ func (ua *UserAgent) sendMessage(profile *account.Profile, target sip.Uri, recip
 		ua.Log().Errorf("MESSAGE: err = %v", err)
 		return err
 	}
-	(*request).ReplaceHeaders(cseq.Name(), []sip.Header{&cseq})
 
 	if body != nil {
 		if contentType.Equals(sip.ContentType("application/octet-stream")) {
@@ -358,9 +362,12 @@ func (ua *UserAgent) handleInvite(request sip.Request, tx sip.ServerTransaction)
 				contactHdr, _ := request.Contact()
 				contactAddr := ua.updateContact2UAAddr(request.Transport(), contactHdr.Address)
 				contactHdr.Address = contactAddr
+				provider := func(method sip.RequestMethod) *sip.CSeq {
+					return ua.nextRequestCSeq(method)
+				}
 
 				is := session.NewInviteSession(ua.RequestWithContext, "UAS",
-					contactHdr, request, *callID, transaction, session.Incoming, ua.Log())
+					provider, contactHdr, request, *callID, transaction, session.Incoming, ua.Log())
 				ua.iss.Store(NewSessionKey(*callID, fromTag), is)
 				is.SetState(session.InviteReceived)
 				ua.handleInviteState(is, &request, nil, session.InviteReceived, &transaction)
@@ -425,8 +432,11 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 				contactHdr, _ := request.Contact()
 				contactAddr := ua.updateContact2UAAddr(request.Transport(), contactHdr.Address)
 				contactHdr.Address = contactAddr
+				provider := func(method sip.RequestMethod) *sip.CSeq {
+					return ua.nextRequestCSeq(method)
+				}
 				is := session.NewInviteSession(ua.RequestWithContext, "UAC",
-					contactHdr, request, *callID, cts, session.Outgoing, ua.Log())
+					provider, contactHdr, request, *callID, cts, session.Outgoing, ua.Log())
 				ua.iss.Store(NewSessionKey(*callID, fromTag), is)
 				is.ProvideOffer(request.Body())
 				is.SetState(session.InviteSent)
@@ -531,6 +541,7 @@ func (ua *UserAgent) RequestWithContext(ctx context.Context, request sip.Request
 						errs <- err
 						return
 					}
+					ua.replaceRequestCSeq(request)
 					if response, err := ua.RequestWithContext(ctx, request,
 						authorizer, true, attempt+1); err == nil {
 						responses <- response
@@ -644,4 +655,25 @@ func (ua *UserAgent) handleNotfiy(request sip.Request, tx sip.ServerTransaction)
 	ua.Log().Debugf("handleNotfiy: Request => %s", request.Short())
 	response := sip.NewResponseFromRequest(request.MessageID(), request, 200, "OK", "")
 	tx.Respond(response)
+}
+
+func (ua *UserAgent) nextRequestCSeq(method sip.RequestMethod) *sip.CSeq {
+	if ua == nil || ua.cseqManager == nil {
+		return nil
+	}
+
+	return &sip.CSeq{
+		SeqNo:      ua.cseqManager.Next(),
+		MethodName: method,
+	}
+}
+
+func (ua *UserAgent) replaceRequestCSeq(request sip.Request) {
+	if ua == nil || ua.cseqManager == nil {
+		return
+	}
+
+	if cseq := ua.nextRequestCSeq(request.Method()); cseq != nil {
+		request.ReplaceHeaders(cseq.Name(), []sip.Header{cseq})
+	}
 }
